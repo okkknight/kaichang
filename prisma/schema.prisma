@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model GenerationRequest {
+  id              String             @id @default(cuid())
+  guestId         String
+  rawInput        String
+  styleOptions    String
+  detectedIntent  String
+  detectedTone   String
+  contentType    String
+  candidateCount  Int
+  providerName   String
+  modelName      String
+  latencyMs      Int
+  status         String
+  createdAt      DateTime           @default(now())
+  candidates     OpeningCandidate[]
+  usageRecords   UsageRecord[]
+}
+
+model OpeningCandidate {
+  id                   String        @id @default(cuid())
+  generationRequestId   String
+  rankOrder            Int
+  openingStrategy      String
+  styleLabel           String
+  content              String
+  qualityScore         Int
+  isCopied             Boolean       @default(false)
+  isSelected           Boolean       @default(false)
+  createdAt            DateTime      @default(now())
+  copiedAt             DateTime?
+  generationRequest    GenerationRequest @relation(fields: [generationRequestId], references: [id], onDelete: Cascade)
+  copyEvents           CopyEvent[]
+
+  @@index([generationRequestId, rankOrder])
+}
+
+model CopyEvent {
+  id                 String          @id @default(cuid())
+  candidateId        String
+  guestId            String?
+  createdAt          DateTime        @default(now())
+  candidate          OpeningCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+}
+
+model UsageRecord {
+  id                 String          @id @default(cuid())
+  guestId            String?
+  actionType         String
+  usageDate          String
+  creditsUsed        Int             @default(1)
+  generationRequestId String?
+  createdAt          DateTime        @default(now())
+  generationRequest  GenerationRequest? @relation(fields: [generationRequestId], references: [id], onDelete: SetNull)
+
+  @@index([guestId, usageDate])
+  @@index([actionType, usageDate])
+}

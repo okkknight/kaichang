@@ -41,6 +41,9 @@
 - `TASK-2026-03-29-004` has been independently verified and passed: generation now streams candidate cards progressively, the first cards appear before complete, and the 3000 service plus browser UI were both checked on the current build.
 - The reviewer observed the progressive UI directly in browser smoke tests: the page showed 2 cards, then 3, then 4 before the request fully completed, which confirms slot-by-slot appending is the active behavior.
 - `TASK-2026-03-29-005` has now also been independently verified and passed: the current build removes the per-slot 3x retry, the opening-quality hard gate, and the slot-level fake fallback, while progressive streaming still works and a real slot failure now surfaces as an error without injecting fake正文.
+- `TASK-2026-03-29-006` has been verified on the current 3000 service: each streamed candidate is persisted before it is emitted, so refine / copy / feedback can find the row as soon as the user sees the card.
+- `TASK-2026-03-29-006` was reviewed as the correct next fix boundary for the stale-refine bug: its scope is narrowly limited to making progressive candidate persistence happen before the card is shown, so already-visible cards are never orphaned from refine / copy / feedback lookups.
+- `TASK-2026-03-29-006` has now been independently accepted on the current 3015 service: the first progressive candidate is already present in `OpeningCandidate` before the client sees it, and `/api/refine-opening` succeeds immediately against that ID even while the generation stream is still active.
 
 ## Architecture
 
@@ -106,6 +109,7 @@
 - `llmMode` / `generationState` / `evaluationState` are surfaced to the UI so mock, recovered, fallback, and pending states can be distinguished.
 - The app is usually easier to validate in `npm run build && npm start` production-preview mode when dev hot reload is noisy.
 - Progressive opening generation is streamed as NDJSON when the frontend sends `progressive: true`; if cards do not appear incrementally, inspect the route stream and `onProgress` wiring before changing the prompt layer.
+- Progressive candidate emission now persists each card before the `candidate` event is sent, so already-visible cards should always be queryable by refine / copy / feedback even if a later slot fails.
 - The database is currently set up for local SQLite at `prisma/dev.db` to keep the MVP self-contained. It can be migrated to PostgreSQL later without changing the domain layer.
 - Copy and quota tracking are based on a guest session cookie for the MVP.
 - The "content too short" gate is now a soft signal in rule evaluation instead of a hard rejection; if generation still fails, inspect prompt echo, duplicate-output, and template-like gates first.

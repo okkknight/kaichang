@@ -22,6 +22,10 @@ This repository intentionally keeps a compact handoff set so future sessions can
 - `TASK-2026-03-29-003` is now resolved on the real provider path: with `MOCK_LLM=0` and the live MiniMax key on the current 3000 service, `/api/refine-opening` returns structured `refinedText` successfully.
 - `TASK-2026-03-29-004` is now independently verified as passed: generation streams candidate cards progressively, the first cards appear before complete, and both the 3000 service and browser UI were checked on the current build.
 - `TASK-2026-03-29-005` is now independently verified as passed: the simplified progressive path no longer uses per-slot retry, rule hard gates, or slot-level fake fallback, and a real slot failure now fails directly while earlier streamed cards remain visible.
+- `TASK-2026-03-29-006` keeps that progressive flow but now persists each emitted candidate before the `candidate` progress event goes out, so refine / copy / feedback can resolve the row as soon as the card appears.
+- The latest smoke verified the new timing on the current 3000 service: the first streamed candidate could be refined, copied, and recorded for feedback immediately, even before the overall request finished.
+- `TASK-2026-03-29-006` was also reviewed as the correct follow-up task for the stale-refine issue: the task stays narrowly focused on aligning candidate emission with persistence and does not widen into refine, prompt, or UI changes.
+- `TASK-2026-03-29-006` is now accepted on the current 3015 service as well: the first candidate row exists in `OpeningCandidate` before the UI renders it, and refine succeeds against that ID during the same generation stream.
 - After each completed task, refresh this handoff pack so the next session does not have to reconstruct the current state from scratch.
 
 ## Read In This Order

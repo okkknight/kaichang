@@ -3,6 +3,7 @@ import { BusinessError } from "@/server/errors";
 import { logError, logInfo, logWarn, summarizeError, truncateForLog } from "@/server/logger";
 import {
   createGenerationRequest,
+  createOpeningCandidate,
   createOpeningCandidates,
   createUsageRecord,
   getUsageCountForGuest,
@@ -20,6 +21,7 @@ import type {
   EvaluationState,
   GenerationState,
   GenerateOpeningsResponse,
+  OpeningCandidateView,
   OpeningBatchRepairSlot,
   OpeningBatchSlot,
   OpeningQualityEvaluation,
@@ -1864,7 +1866,7 @@ async function generateOpeningsSimplified(input: GenerateOpeningsInput): Promise
   });
 
   try {
-    const candidateRows: GeneratedOpeningCandidate[] = [];
+    const responseCandidates: OpeningCandidateView[] = [];
     const normalizedContents: string[] = [];
 
     for (let index = 0; index < candidatePlans.length; index += 1) {
@@ -1894,18 +1896,21 @@ async function generateOpeningsSimplified(input: GenerateOpeningsInput): Promise
 
       normalizedContents.push(content);
 
-      const candidate = candidateSeed(
-        plan?.strategyType ?? "statement",
-        plan?.openingStrategy ?? `候选${index + 1}`,
-        plan?.styleLabel ?? plan?.openingStrategy ?? `候选${index + 1}`,
-        content,
-        0,
+      const candidate = await createOpeningCandidate(
         generationRequest.id,
-        index + 1,
-        null
+        candidateSeed(
+          plan?.strategyType ?? "statement",
+          plan?.openingStrategy ?? `候选${index + 1}`,
+          plan?.styleLabel ?? plan?.openingStrategy ?? `候选${index + 1}`,
+          content,
+          0,
+          generationRequest.id,
+          index + 1,
+          null
+        )
       );
 
-      candidateRows.push(candidate);
+      responseCandidates.push(candidate);
 
       logInfo("generate-openings", "candidate generated", {
         traceId,
@@ -1921,18 +1926,8 @@ async function generateOpeningsSimplified(input: GenerateOpeningsInput): Promise
         requestId: generationRequest.id,
         candidateCount,
         slotIndex: index + 1,
-        completedCount: candidateRows.length,
-        candidate: {
-          id: candidate.id,
-          strategyType: candidate.strategyType,
-          openingStrategy: candidate.openingStrategy,
-          styleLabel: candidate.styleLabel,
-          content: candidate.content,
-          qualityScore: candidate.qualityScore,
-          evaluation: candidate.evaluation,
-          isCopied: candidate.isCopied,
-          isSelected: candidate.isSelected
-        }
+        completedCount: responseCandidates.length,
+        candidate
       });
     }
 
@@ -1962,58 +1957,11 @@ async function generateOpeningsSimplified(input: GenerateOpeningsInput): Promise
       });
     });
 
-    const candidatePayload = candidateRows.map((candidate) => ({
-      id: candidate.id,
-      rankOrder: candidate.rankOrder,
-      openingStrategy: candidate.openingStrategy,
-      strategyType: candidate.strategyType,
-      styleLabel: candidate.styleLabel,
-      content: candidate.content,
-      qualityScore: candidate.qualityScore,
-      evaluation: candidate.evaluation,
-      isCopied: candidate.isCopied,
-      isSelected: candidate.isSelected
-    }));
-
-    let responseCandidates: OpeningCandidateResponse[] = candidatePayload.map(
-      ({ id, strategyType, openingStrategy, styleLabel, content, qualityScore, evaluation, isCopied, isSelected }) => ({
-        id,
-        strategyType,
-        openingStrategy,
-        styleLabel,
-        content,
-        qualityScore,
-        evaluation,
-        isCopied,
-        isSelected
-      })
-    );
-
-    try {
-      const persistedCandidates = await createOpeningCandidates(generationRequest.id, candidatePayload);
-      responseCandidates = persistedCandidates.map((candidate) => ({
-        id: candidate.id,
-        strategyType: candidate.strategyType,
-        openingStrategy: candidate.openingStrategy,
-        styleLabel: candidate.styleLabel,
-        content: candidate.content,
-        qualityScore: candidate.qualityScore,
-        evaluation: candidate.evaluation ?? null,
-        isCopied: candidate.isCopied,
-        isSelected: candidate.isSelected
-      }));
-      logInfo("generate-openings", "candidates persisted", {
-        traceId,
-        requestId: generationRequest.id,
-        candidateCount: responseCandidates.length
-      });
-    } catch (error) {
-      logWarn("generate-openings", "failed to persist candidates, returning in-memory candidates", {
-        traceId,
-        requestId: generationRequest.id,
-        error: summarizeError(error)
-      });
-    }
+    logInfo("generate-openings", "candidates persisted progressively", {
+      traceId,
+      requestId: generationRequest.id,
+      candidateCount: responseCandidates.length
+    });
 
     input.onProgress?.({
       type: "complete",

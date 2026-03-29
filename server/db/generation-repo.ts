@@ -163,6 +163,28 @@ export async function createOpeningCandidates(
   );
 }
 
+export async function createOpeningCandidate(
+  generationRequestId: string,
+  candidate: {
+    id?: string;
+    rankOrder: number;
+    strategyType: string;
+    openingStrategy: string;
+    styleLabel: string;
+    content: string;
+    qualityScore: number;
+    evaluation?: OpeningQualityEvaluation | null;
+    isSelected?: boolean;
+  }
+): Promise<OpeningCandidateView> {
+  const [created] = await createOpeningCandidates(generationRequestId, [candidate]);
+  if (!created) {
+    throw new Error("创建候选失败。");
+  }
+
+  return created;
+}
+
 export async function updateOpeningCandidateEvaluations(
   generationRequestId: string,
   candidates: Array<{

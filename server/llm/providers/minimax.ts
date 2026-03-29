@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { BusinessError } from "@/server/errors";
 import type { GeneratedTextResult, LlmProvider } from "@/server/llm/types";
 import { logInfo, logWarn, summarizeError } from "@/server/logger";
 import type { OpeningStrategyType } from "@/server/opening/types";
@@ -64,6 +65,27 @@ function parseStrictOpeningCandidatesPayload(payload: unknown, expectedCount: nu
 
     return content;
   });
+}
+
+function parseStrictRefinementPayload(payload: unknown) {
+  if (!payload || typeof payload !== "object" || typeof (payload as { refinedText?: unknown }).refinedText !== "string") {
+    throw new BusinessError(
+      "REFINE_STRUCTURED_OUTPUT_INVALID",
+      "模型没有按结构化格式返回改写结果。",
+      502
+    );
+  }
+
+  const refinedText = normalizeText((payload as { refinedText: string }).refinedText);
+  if (!refinedText) {
+    throw new BusinessError(
+      "REFINE_STRUCTURED_OUTPUT_INVALID",
+      "模型没有按结构化格式返回改写结果。",
+      502
+    );
+  }
+
+  return refinedText;
 }
 
 function stripTerminalPunctuation(value: string) {
@@ -148,6 +170,11 @@ function extractStylePreferences(user: string) {
 function extractRawInputFromPrompt(user: string) {
   const line = user.split("\n").find((item) => item.startsWith("原始输入："))?.replace("原始输入：", "").trim();
   return line || "";
+}
+
+function extractRefineOriginalContent(user: string) {
+  const line = user.split("\n").find((item) => item.startsWith("原文："))?.replace("原文：", "").trim();
+  return line || extractRawInputFromPrompt(user) || "";
 }
 
 function isEvaluationPrompt(input: { system: string; user: string }) {
@@ -786,6 +813,11 @@ function buildMockOpeningForPlan(
   };
 }
 
+function buildMockRefinementText(user: string) {
+  const original = normalizeText(extractRefineOriginalContent(user));
+  return original || "这段开头可以再收紧一点。";
+}
+
 function extractPlanItems(user: string) {
   const section = extractSection(user, user.includes("需要修复的候选：") ? "需要修复的候选：" : "候选计划：", user.includes("需要修复的候选：") ? "修复要求：" : "输出要求：");
   const lines = section.split("\n");
@@ -1266,6 +1298,16 @@ function buildMockEvaluationResponse(input: { system: string; user: string }): G
   };
 }
 
+function buildMockRefinementResponse(input: { system: string; user: string }) {
+  return {
+    refinedText: buildMockRefinementText(input.user),
+    providerName: "MiniMax",
+    modelName: getModelName(),
+    llmMode: "mock" as const,
+    recoveryState: "mock" as const
+  };
+}
+
 function collectStringFragments(value: unknown, depth = 0): string[] {
   if (depth > 4 || value == null) {
     return [];
@@ -1436,6 +1478,78 @@ async function callAnthropicCompatibleOpeningModel(input: {
   }));
 }
 
+async function callAnthropicCompatibleRefinementModel(input: {
+  system: string;
+  user: string;
+  temperature?: number;
+  maxTokens?: number;
+}): Promise<{ refinedText: string; providerName: string; modelName: string; llmMode: "real"; recoveryState: "strict" }> {
+  const client = new Anthropic({
+    apiKey: getApiKey(),
+    baseURL: getBaseUrl()
+  });
+
+  const response = await client.messages.create({
+    model: getModelName(),
+    max_tokens: input.maxTokens ?? 900,
+    system: input.system,
+    temperature: input.temperature ?? 0.75,
+    thinking: {
+      type: "disabled"
+    },
+    tool_choice: {
+      type: "tool",
+      name: "emit_refined_opening",
+      disable_parallel_tool_use: true
+    },
+    tools: [
+      {
+        name: "emit_refined_opening",
+        description: "Return a refined opening as structured JSON for the Kaichang refine flow.",
+        input_schema: {
+          type: "object",
+          properties: {
+            refinedText: {
+              type: "string",
+              description: "A directly usable Chinese opening paragraph."
+            }
+          },
+          required: ["refinedText"],
+          additionalProperties: false
+        }
+      }
+    ],
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: input.user }]
+      }
+    ]
+  });
+
+  const toolUse = response.content.find(
+    (block) => block.type === "tool_use" && (block as { name?: string }).name === "emit_refined_opening"
+  ) as { id: string; type: "tool_use"; name: string; input: unknown } | undefined;
+
+  if (!toolUse) {
+    throw new BusinessError(
+      "REFINE_STRUCTURED_OUTPUT_INVALID",
+      "模型没有按结构化格式返回改写结果。",
+      502
+    );
+  }
+
+  const refinedText = parseStrictRefinementPayload(toolUse.input);
+
+  return {
+    refinedText,
+    providerName: "MiniMax",
+    modelName: getModelName(),
+    llmMode: "real",
+    recoveryState: "strict"
+  };
+}
+
 function extractLooseCandidateTexts(text: string) {
   const normalized = normalizeText(text);
   const blocks: string[] = [];
@@ -1513,7 +1627,7 @@ export function createMiniMaxProvider(): LlmProvider {
       llmMode: "mock",
       async generateText(input) {
         if (isEvaluationPrompt(input)) {
-      return {
+          return {
             ...buildMockEvaluationResponse(input),
             llmMode: "mock" as const,
             recoveryState: "mock" as const
@@ -1555,6 +1669,9 @@ export function createMiniMaxProvider(): LlmProvider {
           llmMode: "mock" as const,
           recoveryState: "mock" as const
         } satisfies GeneratedTextResult));
+      },
+      async generateRefinement(input) {
+        return buildMockRefinementResponse(input);
       }
     };
   }
@@ -1594,6 +1711,29 @@ export function createMiniMaxProvider(): LlmProvider {
         return generatedCandidates;
       } catch (error) {
         logWarn("llm/minimax", "generateOpenings failed", {
+          modelName: getModelName(),
+          error: summarizeError(error)
+        });
+        throw error;
+      }
+    },
+    async generateRefinement(input) {
+      try {
+        logInfo("llm/minimax", "generateRefinement request", {
+          modelName: getModelName(),
+          temperature: input.temperature ?? 0.75,
+          maxTokens: input.maxTokens ?? 900,
+          systemPreview: input.system.slice(0, 80),
+          userPreview: input.user.slice(0, 80)
+        });
+        return callAnthropicCompatibleRefinementModel({
+          system: input.system,
+          user: input.user,
+          temperature: input.temperature,
+          maxTokens: input.maxTokens
+        });
+      } catch (error) {
+        logWarn("llm/minimax", "generateRefinement failed", {
           modelName: getModelName(),
           error: summarizeError(error)
         });

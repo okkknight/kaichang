@@ -46,3 +46,8 @@
 - Replaced the loose opening-parser with a forced `emit_opening_candidates` tool call on the Anthropic-compatible provider, so the model now returns structured candidate JSON instead of numbered requirement fragments.
 - Revalidated the campus-love smoke input after the parser change; it now returns four structured opening candidates through the tool-call path.
 - Marked this snapshot as the current stable handoff point after independently rechecking the browser hydration issue and confirming the input counter / generate-button flow works again in the active server process.
+- Added a structured refine-opening path that mirrors the candidate tool-call flow with `emit_refined_opening`, and tightened the route to accept only `refinedText` from the model.
+- Revalidated the refine flow in `MOCK_LLM=1` mode; clicking a candidate's refine action now returns a plain opening text payload without analysis or thinking text in the response.
+- Reviewed `TASK-2026-03-29-002` independently: the refine path now uses structured tool-call output with `emit_refined_opening`, returns only `refinedText`, and passes `npm run build` plus `npm run typecheck` after build.
+- Rechecked `TASK-2026-03-29-002` on the real provider path with `MOCK_LLM=0` and a live `MINIMAX_API_KEY`; the refine endpoint now fails with `模型没有按结构化格式返回改写结果。`, so real-path verification is still blocked even though the mock path passes.
+- Rechecked `TASK-2026-03-29-003` on the real provider path with `MOCK_LLM=0` and a live `MINIMAX_API_KEY`; the current 3000 service now returns structured `refinedText` successfully, so the live refine regression is resolved.

@@ -13,10 +13,19 @@ export type GeneratedTextResult = {
   recoveryState?: "strict" | "recovered" | "fallback" | "mock";
 };
 
+export type StructuredRefinementResult = {
+  refinedText: string;
+  providerName: string;
+  modelName: string;
+  llmMode?: "real" | "mock";
+  recoveryState?: "strict" | "mock";
+};
+
 export type LlmProvider = {
   providerName: string;
   modelName: string;
   llmMode?: "real" | "mock";
   generateText(input: GenerateTextInput): Promise<GeneratedTextResult>;
   generateOpenings(input: GenerateTextInput & { count: number }): Promise<GeneratedTextResult[]>;
+  generateRefinement(input: GenerateTextInput): Promise<StructuredRefinementResult>;
 };

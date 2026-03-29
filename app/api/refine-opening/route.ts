@@ -30,7 +30,9 @@ function buildSystemPrompt() {
   return [
     "你是《开场》的中文开头改写器。",
     "你的任务只有改写开头，不要解释，不要分析，不要列点，不要输出标题或编号。",
-    "你必须只输出改写后的中文开头正文，不要输出 JSON，不要输出 Markdown，不要输出多余文字。",
+    "你必须调用名为 emit_refined_opening 的工具来返回结果，不要直接输出正文。",
+    "工具输入必须且只能包含 refinedText 字段，且 refinedText 只能是可直接展示的中文开头正文。",
+    "不要输出 JSON 以外的额外文字，不要输出 Markdown，不要输出 thinking，不要输出分析过程。",
     "保留原始主题，不要跑题。",
     "保留开头属性，不要写成整段正文。",
     "如果要求更克制，就收紧情绪表达；如果要求更抓人，就提高第一句钩子；如果要求更画面，就增加具体场景；如果要求更文学，就提升语言质感但不要晦涩。"
@@ -82,7 +84,7 @@ export async function POST(request: Request) {
 
     const provider = getDefaultLlmProvider();
     const instructionLabel = REFINE_MAP[parsed.instruction];
-    const response = await provider.generateText({
+    const response = await provider.generateRefinement({
       system: buildSystemPrompt(),
       user: buildUserPrompt({
         instructionLabel,
@@ -95,12 +97,14 @@ export async function POST(request: Request) {
         content: context.content
       }),
       temperature: 0.75,
-      maxTokens: 320
+      // MiniMax still spends a large part of the output budget on reasoning metadata
+      // before emitting the forced tool call, so refine needs more headroom than 320.
+      maxTokens: 900
     });
 
-    const refinedText = normalizeText(response.text);
+    const refinedText = normalizeText(response.refinedText);
     if (!refinedText) {
-      throw new Error("模型没有返回可用的改写结果。");
+      throw new BusinessError("REFINE_STRUCTURED_OUTPUT_INVALID", "模型没有按结构化格式返回改写结果。", 502);
     }
 
     logInfo("api/refine-opening", "request completed", {
@@ -108,6 +112,7 @@ export async function POST(request: Request) {
       candidateId: parsed.candidateId,
       instruction: parsed.instruction,
       modelName: response.modelName,
+      llmMode: response.llmMode,
       refinedLength: refinedText.length,
       refinedPreview: truncateForLog(refinedText, 120)
     });
@@ -117,7 +122,8 @@ export async function POST(request: Request) {
       instruction: parsed.instruction,
       instructionLabel,
       refinedText,
-      modelName: response.modelName
+      modelName: response.modelName,
+      llmMode: response.llmMode
     });
   } catch (error) {
     logError("api/refine-opening", "request failed", {

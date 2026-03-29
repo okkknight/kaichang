@@ -19,6 +19,7 @@
 - Front-end self-review cards were removed; scoring now stays in the backend for analysis and learning, while main-request sorting is no longer coupled to evaluation output.
 - `generateOpenings()` now resolves to the simplified one-call path in [`server/opening/generate-openings.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/generate-openings.ts): raw input enters a minimal prompt, the provider is called once, the returned text is lightly normalized, and only then is it hard-validated.
 - The simplified opening path now uses a forced Anthropic-style tool call named `emit_opening_candidates` for candidate generation, and the parser only accepts that structured JSON payload instead of guessing from loose text blocks.
+- The refine route now uses the same structured tool-call pattern with `emit_refined_opening`, and the frontend only consumes the returned `refinedText` field instead of any analysis or thinking text.
 - The active path no longer uses the previous batch / repair / compress / retry / fallback orchestration. Those helpers still exist lower in the file for historical context, but they are no longer on the exported execution path.
 - Input analysis has been thinned, but it is still not a no-op passthrough: content type, style hints, length preference, and a compatibility `semanticTheme` field still exist for downstream modules.
 - The latest P0 task downgraded the "content too short" gate from hard failure to soft quality feedback, so short candidates can now return normally while repeat-expansion and prompt-echo checks still block bad outputs.
@@ -31,9 +32,11 @@
 - `npm run typecheck` and `npm run build` both pass in the current workspace.
 - The generation, copy, feedback, refine, and selection flows were smoke-tested against the local SQLite database and browser UI. The latest generation-core pass specifically revalidated the standard Chinese opening inputs after the simplification changes.
 - Copy events persist the selected candidate and generation request link, while copy errors remain mapped to business errors.
-- Real-provider validation still needs a follow-up run in an environment that actually has `MINIMAX_API_KEY` or `ANTHROPIC_API_KEY`; this workspace did not expose a live key during the latest handoff refresh.
-- Current remaining product risk is mostly quality-side: mock output still has some template flavor, and real-provider behavior still needs a live-key regression pass before the simplification can be considered fully production-signed-off.
+- Real-provider validation is now passing for both generation and refine in the current workspace, but the MiniMax-compatible refine path needs a larger output budget because the model spends a large chunk of tokens on thinking metadata before emitting the forced tool call.
+- Current remaining product risk is mostly quality-side: mock output still has some template flavor, and the refine route should keep generous token headroom so the forced structured tool call can land reliably in real provider mode.
 - This workspace snapshot is now treated as the current stable handoff point after the browser hydration issue was verified and the input counter / generate-button flow was confirmed working again in the active server process.
+- `TASK-2026-03-29-002` has been independently verified and passed: refine now uses structured tool-call output, surfaces only `refinedText`, and the workspace passes `npm run build` and post-build `npm run typecheck`.
+- `TASK-2026-03-29-003` is now resolved on the real provider path: with `MOCK_LLM=0` and the live MiniMax key on the current 3000 service, `/api/refine-opening` returns structured `refinedText` successfully.
 
 ## Architecture
 
@@ -101,10 +104,11 @@
 - Copy and quota tracking are based on a guest session cookie for the MVP.
 - The "content too short" gate is now a soft signal in rule evaluation instead of a hard rejection; if generation still fails, inspect prompt echo, duplicate-output, and template-like gates first.
 - Failed generation requests now clear the current candidate/request state in the UI so previous results are not mistaken for the latest attempt.
+- Refine requests now fail loudly if the model does not return structured `refinedText`, which keeps the preview from leaking analysis, reasoning, or other process text into the UI.
 - `next build` may reintroduce `.next/types/**/*.ts` into `tsconfig.json`; after build verification, restore the repo's direct typecheck include list so `npm install && npm run typecheck` still works without a prior build.
 - The current major risk is still split in two:
-  - real-provider behavior still needs a live-key regression pass after the latest extraction/normalization changes
   - mock mode is stable enough for smoke testing but should not be mistaken for final product quality
+  - refine should retain a generous output budget because MiniMax can spend most of the quota on thinking before it emits the forced tool call
 - Background evaluation, feedback learning, and copy tracking are intentionally backend-only; the UI should stay lightweight and avoid self-review blocks.
 - Recent-output signature memory and hard gating exist, but they are not the main thing to trust for output quality; if candidate quality regresses, verify raw-input handling and provider parsing first.
 - The highest-priority open product issue is still candidate quality: outputs can remain too close to the user prompt, too templated in mock mode, or too abstract in legacy helper paths even though the simplified route is now more direct.

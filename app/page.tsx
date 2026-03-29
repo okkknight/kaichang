@@ -8,16 +8,49 @@ import {
   type EvaluationState,
   type GenerationState,
   type LlmMode,
-  type OpeningCandidateView
+  type OpeningCandidateView,
+  type GenerateOpeningsResponse
 } from "@/server/opening/types";
 
 const MAX_INPUT_LENGTH = 2000;
 const MIN_INPUT_LENGTH = 20;
 
+type GenerateOpeningsStreamEvent =
+  | {
+      type: "meta";
+      requestId: string;
+      candidateCount: number;
+      usageRemaining: number;
+      providerName: string;
+      modelName: string;
+      llmMode: LlmMode;
+      generationState: GenerationState;
+      evaluationState: EvaluationState;
+    }
+  | {
+      type: "candidate";
+      requestId: string;
+      candidateCount: number;
+      slotIndex: number;
+      completedCount: number;
+      candidate: OpeningCandidateView;
+    }
+  | {
+      type: "complete";
+      requestId: string;
+      response: GenerateOpeningsResponse;
+    }
+  | {
+      type: "error";
+      requestId: string;
+      error: string;
+    };
+
 async function postGenerateOpenings(
   rawInput: string,
   selectedStyles: string[],
-  candidateCount: number
+  candidateCount: number,
+  onEvent?: (event: GenerateOpeningsStreamEvent) => void
 ) {
   const response = await fetch("/api/generate-openings", {
     method: "POST",
@@ -27,24 +60,72 @@ async function postGenerateOpenings(
     body: JSON.stringify({
       rawInput,
       styleOptions: selectedStyles,
-      candidateCount
+      candidateCount,
+      progressive: true
     })
   });
 
-  const payload = (await response.json()) as {
-    requestId?: string;
-    candidates?: OpeningCandidateView[];
-    usageRemaining?: number;
-    llmMode?: LlmMode;
-    generationState?: GenerationState;
-    evaluationState?: EvaluationState;
-    error?: string;
-  };
-
   if (response.ok) {
-    return payload;
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("模型暂时不可用，请稍后再试。");
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalPayload: GenerateOpeningsResponse | null = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex >= 0) {
+        const rawLine = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        newlineIndex = buffer.indexOf("\n");
+
+        if (!rawLine) {
+          continue;
+        }
+
+        const event = JSON.parse(rawLine) as GenerateOpeningsStreamEvent;
+        onEvent?.(event);
+
+        if (event.type === "complete") {
+          finalPayload = event.response;
+        }
+        if (event.type === "error") {
+          throw new Error(event.error);
+        }
+      }
+    }
+
+    const tail = buffer.trim();
+    if (tail) {
+      const event = JSON.parse(tail) as GenerateOpeningsStreamEvent;
+      onEvent?.(event);
+      if (event.type === "complete") {
+        finalPayload = event.response;
+      }
+      if (event.type === "error") {
+        throw new Error(event.error);
+      }
+    }
+
+    if (!finalPayload) {
+      throw new Error("生成结果未完整返回。");
+    }
+
+    return finalPayload;
   }
 
+  const payload = (await response.json()) as {
+    error?: string;
+  };
   throw new Error(payload.error ?? "生成失败，请稍后再试。");
 }
 
@@ -96,9 +177,42 @@ export default function HomePage() {
     setLlmMode(null);
     setGenerationState(null);
     setEvaluationState(null);
+    let receivedAnyCandidate = false;
 
     try {
-      const payload = await postGenerateOpenings(rawInput, selectedStyles, 4);
+      const payload = await postGenerateOpenings(rawInput, selectedStyles, 4, (event) => {
+        if (event.type === "meta") {
+          setRequestId(event.requestId);
+          setUsageRemaining(event.usageRemaining);
+          setLlmMode(event.llmMode);
+          setGenerationState(event.generationState);
+          setEvaluationState(event.evaluationState);
+          setStatusKind("idle");
+          setStatus("第一条候选会先出来，后面的还在继续补齐。");
+          return;
+        }
+
+        if (event.type === "candidate") {
+          receivedAnyCandidate = true;
+          setCandidates((current) => {
+            const next = current.filter((item) => item.id !== event.candidate.id);
+            next.push(event.candidate);
+            return next;
+          });
+          setStatusKind("idle");
+          setStatus(`已经先返回第 ${event.slotIndex} 条候选，后面的还在继续。`);
+          return;
+        }
+
+        if (event.type === "complete") {
+          setRequestId(event.response.requestId);
+          setCandidates(event.response.candidates ?? []);
+          setUsageRemaining(event.response.usageRemaining ?? null);
+          setLlmMode(event.response.llmMode ?? null);
+          setGenerationState(event.response.generationState ?? null);
+          setEvaluationState(event.response.evaluationState ?? null);
+        }
+      });
 
       setRequestId(payload.requestId ?? null);
       setCandidates(payload.candidates ?? []);
@@ -110,12 +224,14 @@ export default function HomePage() {
       setStatus("开头已经排好队了，可以挑一条最像你要的。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "生成失败，请稍后再试。";
-      setRequestId(null);
-      setCandidates([]);
-      setUsageRemaining(null);
-      setLlmMode(null);
-      setGenerationState(null);
-      setEvaluationState(null);
+      if (!receivedAnyCandidate) {
+        setRequestId(null);
+        setCandidates([]);
+        setUsageRemaining(null);
+        setLlmMode(null);
+        setGenerationState(null);
+        setEvaluationState(null);
+      }
       setStatusKind("error");
       setStatus(message);
     } finally {

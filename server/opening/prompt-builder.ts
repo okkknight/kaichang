@@ -20,6 +20,13 @@ type BuildMinimalOpeningBatchPromptInput = {
   candidateCount: number;
 };
 
+type BuildOpeningSingleCandidatePromptInput = {
+  rawInput: string;
+  styleOptions: string[];
+  strategy: OpeningStrategyPlan;
+  candidateIndex: number;
+};
+
 function buildLengthGuidance(lengthHint?: string) {
   return [
     "- 长度优先控制在 100-200 字，理想 120-180 字。",
@@ -155,6 +162,40 @@ export function buildOpeningBatchPrompt({
       entryAngle: strategy.entryAngle
     }))
   };
+}
+
+export function buildOpeningSingleCandidatePrompt({
+  rawInput,
+  styleOptions,
+  strategy,
+  candidateIndex
+}: BuildOpeningSingleCandidatePromptInput) {
+  const styleList = styleOptions.length > 0 ? styleOptions.join("、") : "自动判断";
+
+  const system = [
+    "你是《开场》的中文第一段写作者。",
+    `请调用名为 emit_opening_candidates 的工具，候选数量必须正好是 1 条。`,
+    `本次候选序号：第 ${candidateIndex + 1} 条。`,
+    `本次切入口：${buildOpeningAngleInstruction(strategy)}。`,
+    `整体气质尽量偏向：${styleList}。`,
+    "不要直接输出正文文本、标题、列表、代码块、解释、前言、总结或任何额外文字。",
+    '工具参数格式必须是：{"candidates":[{"content":"唯一候选"}]}',
+    "每个 content 只能是可直接展示的正文字符串，不要编号，不要换行，不要把输入说明写进正文。",
+    "只写一条候选，避免和输入里的连续原句片段太像。",
+    buildLengthGuidance(strategy.lengthHint)
+  ].join("\n");
+
+  const user = [
+    `原始输入：${rawInput.trim()}`,
+    `题面核心：${extractOpeningCoreInput(rawInput)}`,
+    `候选序号：${candidateIndex + 1}`,
+    `策略类型：${strategy.strategyType}`,
+    `策略名称：${strategy.label}`,
+    `表达方式：${strategy.expressionMode}`,
+    "请直接给出 1 条候选开头，禁止输出其他文字。"
+  ].join("\n");
+
+  return { system, user };
 }
 
 export function buildOpeningBatchRepairPrompt({

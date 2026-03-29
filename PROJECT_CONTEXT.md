@@ -17,10 +17,11 @@
 - Hand-off pack is established and should stay compact.
 - Core generation domain, API routes, UI shell, Prisma schema, feedback routes, refine route, history/analytics routes, and logging helpers are present.
 - Front-end self-review cards were removed; scoring now stays in the backend for analysis and learning, while main-request sorting is no longer coupled to evaluation output.
-- `generateOpenings()` now resolves to the simplified one-call path in [`server/opening/generate-openings.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/generate-openings.ts): raw input enters a minimal prompt, the provider is called once, the returned text is lightly normalized, and only then is it hard-validated.
-- The simplified opening path now uses a forced Anthropic-style tool call named `emit_opening_candidates` for candidate generation, and the parser only accepts that structured JSON payload instead of guessing from loose text blocks.
+- `generateOpenings()` now resolves to the simplified progressive path in [`server/opening/generate-openings.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/generate-openings.ts): each candidate is generated as its own structured unit, emitted to the UI as soon as it is ready, then normalized and validated before persistence.
+- The opening route now supports progressive NDJSON streaming from [`app/api/generate-openings/route.ts`](/Users/linpeiwen/knightspace/kaichang/app/api/generate-openings/route.ts), and [`app/page.tsx`](/Users/linpeiwen/knightspace/kaichang/app/page.tsx) appends candidates incrementally instead of waiting for the full set.
+- The structured tool-call parser still exists for single-candidate generation, but the active flow is now slot-by-slot rather than a single batch call. Legacy batch / repair / compress / fallback helpers remain lower in the file as historical code.
+- `TASK-2026-03-29-005` removed the per-slot 3x retry, the opening-quality hard gate, and the slot-level fake fallback, so a slot that truly fails now fails directly while earlier streamed candidates stay on screen.
 - The refine route now uses the same structured tool-call pattern with `emit_refined_opening`, and the frontend only consumes the returned `refinedText` field instead of any analysis or thinking text.
-- The active path no longer uses the previous batch / repair / compress / retry / fallback orchestration. Those helpers still exist lower in the file for historical context, but they are no longer on the exported execution path.
 - Input analysis has been thinned, but it is still not a no-op passthrough: content type, style hints, length preference, and a compatibility `semanticTheme` field still exist for downstream modules.
 - The latest P0 task downgraded the "content too short" gate from hard failure to soft quality feedback, so short candidates can now return normally while repeat-expansion and prompt-echo checks still block bad outputs.
 - The simplified generation path can still reject some raw-input-led prompts as prompt echo when the model mirrors the task too closely; that failure now clears the UI candidate list instead of leaving stale results on screen.
@@ -30,13 +31,16 @@
 - Learning still combines copy/select and feedback signals, with guest/session-level preference profiles and lightweight feedback weighting.
 - Local SQLite schema initialization is handled by `npm run db:push`, backed by `scripts/init-db.mjs`.
 - `npm run typecheck` and `npm run build` both pass in the current workspace.
-- The generation, copy, feedback, refine, and selection flows were smoke-tested against the local SQLite database and browser UI. The latest generation-core pass specifically revalidated the standard Chinese opening inputs after the simplification changes.
+- The generation, copy, feedback, refine, and selection flows were smoke-tested against the local SQLite database and browser UI. The latest generation-core pass revalidated the standard Chinese opening inputs after the progressive slot-by-slot change.
 - Copy events persist the selected candidate and generation request link, while copy errors remain mapped to business errors.
 - Real-provider validation is now passing for both generation and refine in the current workspace, but the MiniMax-compatible refine path needs a larger output budget because the model spends a large chunk of tokens on thinking metadata before emitting the forced tool call.
-- Current remaining product risk is mostly quality-side: mock output still has some template flavor, and the refine route should keep generous token headroom so the forced structured tool call can land reliably in real provider mode.
+- Current remaining product risk is mostly quality-side: slot-by-slot generation is now progressive, but mock output still has some template flavor, and the refine route should keep generous token headroom so the forced structured tool call can land reliably in real provider mode.
 - This workspace snapshot is now treated as the current stable handoff point after the browser hydration issue was verified and the input counter / generate-button flow was confirmed working again in the active server process.
 - `TASK-2026-03-29-002` has been independently verified and passed: refine now uses structured tool-call output, surfaces only `refinedText`, and the workspace passes `npm run build` and post-build `npm run typecheck`.
 - `TASK-2026-03-29-003` is now resolved on the real provider path: with `MOCK_LLM=0` and the live MiniMax key on the current 3000 service, `/api/refine-opening` returns structured `refinedText` successfully.
+- `TASK-2026-03-29-004` has been independently verified and passed: generation now streams candidate cards progressively, the first cards appear before complete, and the 3000 service plus browser UI were both checked on the current build.
+- The reviewer observed the progressive UI directly in browser smoke tests: the page showed 2 cards, then 3, then 4 before the request fully completed, which confirms slot-by-slot appending is the active behavior.
+- `TASK-2026-03-29-005` has now also been independently verified and passed: the current build removes the per-slot 3x retry, the opening-quality hard gate, and the slot-level fake fallback, while progressive streaming still works and a real slot failure now surfaces as an error without injecting fake正文.
 
 ## Architecture
 
@@ -56,6 +60,7 @@
 
 - [`app/page.tsx`](/Users/linpeiwen/knightspace/kaichang/app/page.tsx)
 - [`app/api/generate-openings/route.ts`](/Users/linpeiwen/knightspace/kaichang/app/api/generate-openings/route.ts)
+- [`components/opening-results.tsx`](/Users/linpeiwen/knightspace/kaichang/components/opening-results.tsx)
 - [`server/opening/generate-openings.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/generate-openings.ts)
 - [`server/opening/analyze-input.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/analyze-input.ts)
 - [`server/opening/strategy-engine.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/strategy-engine.ts)
@@ -100,6 +105,7 @@
 - `MOCK_LLM=1` is available for local development if a real MiniMax key is not configured.
 - `llmMode` / `generationState` / `evaluationState` are surfaced to the UI so mock, recovered, fallback, and pending states can be distinguished.
 - The app is usually easier to validate in `npm run build && npm start` production-preview mode when dev hot reload is noisy.
+- Progressive opening generation is streamed as NDJSON when the frontend sends `progressive: true`; if cards do not appear incrementally, inspect the route stream and `onProgress` wiring before changing the prompt layer.
 - The database is currently set up for local SQLite at `prisma/dev.db` to keep the MVP self-contained. It can be migrated to PostgreSQL later without changing the domain layer.
 - Copy and quota tracking are based on a guest session cookie for the MVP.
 - The "content too short" gate is now a soft signal in rule evaluation instead of a hard rejection; if generation still fails, inspect prompt echo, duplicate-output, and template-like gates first.
@@ -109,6 +115,7 @@
 - The current major risk is still split in two:
   - mock mode is stable enough for smoke testing but should not be mistaken for final product quality
   - refine should retain a generous output budget because MiniMax can spend most of the quota on thinking before it emits the forced tool call
+- Opening latency is dominated by the provider call, not by input analysis, prompt building, normalization, or persistence. On the current key, `MiniMax-M2.1-highspeed` and `MiniMax-M2.7-highspeed` were rejected as unsupported; `MiniMax-M2.5-highspeed` is the only usable model. Among stable variants tested, `3` candidates with a `700` token cap was the fastest, while `512`/`600` token caps were too brittle because the tool call sometimes disappeared.
 - Background evaluation, feedback learning, and copy tracking are intentionally backend-only; the UI should stay lightweight and avoid self-review blocks.
 - Recent-output signature memory and hard gating exist, but they are not the main thing to trust for output quality; if candidate quality regresses, verify raw-input handling and provider parsing first.
 - The highest-priority open product issue is still candidate quality: outputs can remain too close to the user prompt, too templated in mock mode, or too abstract in legacy helper paths even though the simplified route is now more direct.

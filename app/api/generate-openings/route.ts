@@ -9,11 +9,16 @@ import type { GenerateOpeningsResponse } from "@/server/opening/types";
 const RequestSchema = z.object({
   rawInput: z.string().min(1),
   styleOptions: z.array(z.string()).default([]),
-  candidateCount: z.number().int().min(3).max(5).optional()
+  candidateCount: z.number().int().min(3).max(5).optional(),
+  progressive: z.boolean().optional()
 });
 
 function getGuestId(cookieStore: Awaited<ReturnType<typeof cookies>>) {
   return cookieStore.get("kaichang_guest_id")?.value ?? crypto.randomUUID();
+}
+
+function buildGuestCookie(guestId: string) {
+  return `kaichang_guest_id=${guestId}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * 365}`;
 }
 
 export async function POST(request: Request) {
@@ -46,6 +51,53 @@ export async function POST(request: Request) {
       inputLength: parsed.rawInput.trim().length,
       inputPreview: truncateForLog(parsed.rawInput, 80)
     });
+
+    if (parsed.progressive) {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const send = (event: unknown) => {
+            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          };
+
+          void (async () => {
+            try {
+              await generateOpenings({
+                rawInput: parsed.rawInput,
+                styleOptions: parsed.styleOptions,
+                candidateCount: parsed.candidateCount ?? 4,
+                guestId,
+                traceId,
+                onProgress: send
+              });
+              controller.close();
+            } catch (error) {
+              const message =
+                error instanceof z.ZodError
+                  ? "输入格式不正确。"
+                  : isBusinessError(error)
+                    ? error.message
+                    : "模型暂时不可用，请稍后再试。";
+              send({ type: "error", requestId: traceId, error: message });
+              controller.close();
+            }
+          })();
+        }
+      });
+
+      const response = new Response(stream, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/x-ndjson; charset=utf-8",
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
+          "Set-Cookie": buildGuestCookie(guestId)
+        }
+      });
+
+      return response;
+    }
+
     const result = await generateOpenings({
       rawInput: parsed.rawInput,
       styleOptions: parsed.styleOptions,

@@ -159,6 +159,32 @@ export type GeneratedOpeningCandidate = OpeningCandidateView & {
   rankOrder: number;
 };
 
+export type GenerateOpeningsProgressEvent =
+  | {
+      type: "meta";
+      requestId: string;
+      candidateCount: number;
+      usageRemaining: number;
+      providerName: string;
+      modelName: string;
+      llmMode: LlmMode;
+      generationState: GenerationState;
+      evaluationState: EvaluationState;
+    }
+  | {
+      type: "candidate";
+      requestId: string;
+      candidateCount: number;
+      slotIndex: number;
+      completedCount: number;
+      candidate: OpeningCandidateView;
+    }
+  | {
+      type: "complete";
+      requestId: string;
+      response: GenerateOpeningsResponse;
+    };
+
 export type GenerateOpeningsResponse = {
   requestId: string;
   analysis: InputAnalysisResult;
@@ -177,4 +203,5 @@ export type GenerateOpeningsInput = {
   candidateCount: number;
   guestId: string;
   traceId?: string;
+  onProgress?: (event: GenerateOpeningsProgressEvent) => void;
 };

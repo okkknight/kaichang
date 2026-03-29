@@ -62,7 +62,9 @@ export function OpeningResults({
           <h2 className="results-title">候选开场</h2>
           <div className="results-meta">
             {candidates.length > 0
-              ? `${candidates.length} 条候选已经准备好了。`
+              ? isGenerating
+                ? `已先返回 ${candidates.length} 条候选，后面的还在继续补齐。`
+                : `${candidates.length} 条候选已经准备好了。`
               : isGenerating
                 ? "正在生成，这次结果会替换上一轮。"
                 : "生成之后，结果会在这里展示。"}

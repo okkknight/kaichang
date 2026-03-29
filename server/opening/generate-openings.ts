@@ -31,7 +31,8 @@ import {
   buildOpeningBatchRepairPrompt,
   buildOpeningCompressionPrompt,
   buildMinimalOpeningBatchPrompt,
-  buildOpeningPrompt
+  buildOpeningPrompt,
+  buildOpeningSingleCandidatePrompt
 } from "@/server/opening/prompt-builder";
 import { chooseOpeningStrategies } from "@/server/opening/strategy-engine";
 import { analyzeSentenceShape, rankCandidates } from "@/server/opening/rank-candidates";
@@ -68,6 +69,7 @@ const SOFT_OPENING_TARGET_MIN = 100;
 const SOFT_OPENING_TARGET_MAX = 200;
 const MAX_GENERATION_TOKENS = 1024;
 const MAX_COMPRESSION_TOKENS = 256;
+const STRUCTURED_SINGLE_CANDIDATE_TOKENS = 700;
 const MODEL_CALL_RETRIES = 1;
 const RECENT_GENERATION_HISTORY_LIMIT = 15;
 const RECENT_SIGNATURE_CANDIDATE_LIMIT = 60;
@@ -1673,10 +1675,9 @@ function isDuplicateOpening(content: string, seenContents: string[]) {
   return seenContents.some((item) => normalized === normalizeOpeningText(item));
 }
 
-async function generateCandidateWithRetry(input: {
+async function generateStructuredCandidate(input: {
   provider: ReturnType<typeof getDefaultLlmProvider>;
   rawInput: string;
-  analysis: ReturnType<typeof analyzeInput>;
   styleOptions: string[];
   plan: ReturnType<typeof buildCandidatePlans>[number];
   candidateIndex: number;
@@ -1684,124 +1685,98 @@ async function generateCandidateWithRetry(input: {
   traceId: string;
   requestId: string;
 }) {
-  let lastReason = "模型暂时不可用";
-  let lastRawOutput = "";
+  const prompt = buildOpeningSingleCandidatePrompt({
+    rawInput: input.rawInput,
+    styleOptions: input.styleOptions,
+    strategy: {
+      strategyType: input.plan.strategyType,
+      label: input.plan.openingStrategy,
+      reason: input.plan.angle,
+      angle: input.plan.angle,
+      lengthHint: input.plan.lengthHint,
+      expressionMode: input.plan.expressionMode,
+      entryAngle: input.plan.entryAngle
+    },
+    candidateIndex: input.candidateIndex
+  });
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const prompt = buildOpeningPrompt({
-        rawInput: input.rawInput,
-        strategy: {
-          strategyType: input.plan.strategyType,
-          label: input.plan.openingStrategy,
-          reason: input.plan.angle,
-          angle: input.plan.angle,
-          lengthHint: input.plan.lengthHint,
-          expressionMode: input.plan.expressionMode,
-          entryAngle: input.plan.entryAngle
-        },
-        styleOptions: input.styleOptions,
-        candidateIndex: input.candidateIndex,
-        attempt,
-        avoidOpenings: input.seenContents
-      });
+  const results = await input.provider.generateOpenings({
+    system: prompt.system,
+    user: prompt.user,
+    temperature: input.provider.llmMode === "mock" ? 0.8 : 0.72,
+    maxTokens: STRUCTURED_SINGLE_CANDIDATE_TOKENS,
+    count: 1
+  });
 
-      const result = await input.provider.generateText({
-        system: prompt.system,
-        user: prompt.user,
-        temperature: input.provider.llmMode === "mock" ? 0.8 + attempt * 0.05 : 0.9 + attempt * 0.05,
-        maxTokens: input.provider.llmMode === "mock" ? 420 : MAX_GENERATION_TOKENS
-      });
-
-      lastRawOutput = result.text;
-      const content = normalizeProviderOpening(result.text, input.rawInput);
-      const validationReason = getMinimalOpeningValidationReason(content, input.rawInput);
-
-      if (validationReason) {
-        lastReason = validationReason;
-        logWarn("generate-openings", "candidate normalized but still invalid", {
-          traceId: input.traceId,
-          requestId: input.requestId,
-          index: input.candidateIndex + 1,
-          attempt: attempt + 1,
-          reason: validationReason,
-          rawPreview: truncateForLog(result.text, 160)
-        });
-        continue;
-      }
-
-      const ruleEvaluation = buildRuleBasedOpeningEvaluation(content, {
-        rawInput: input.rawInput,
-        analysis: input.analysis,
-        strategyType: input.plan.strategyType,
-        modelName: input.provider.modelName
-      });
-      const hardRuleMarkers = ["任务说明腔", "模板化表达", "原句回声", "开头像总结段"];
-      const nonLengthWeaknesses = ruleEvaluation.weaknesses.filter(
-        (item) => !LENGTH_WEAKNESS_MARKERS.some((marker) => item.includes(marker))
-      );
-      const hasHardRuleFailure =
-        (nonLengthWeaknesses.length > 0 && ruleEvaluation.totalScore < 45) ||
-        nonLengthWeaknesses.some((item) => hardRuleMarkers.some((marker) => item.includes(marker)));
-
-      if (hasHardRuleFailure) {
-        lastReason = `规则评估未通过（${ruleEvaluation.weaknesses.join(" / ") || "质量不足"}）`;
-        logWarn("generate-openings", "candidate rejected by rule gate", {
-          traceId: input.traceId,
-          requestId: input.requestId,
-          index: input.candidateIndex + 1,
-          attempt: attempt + 1,
-          totalScore: ruleEvaluation.totalScore,
-          weaknesses: ruleEvaluation.weaknesses,
-          rawPreview: truncateForLog(result.text, 160)
-        });
-        continue;
-      }
-
-      const maybeCompressed = await compressOpeningContent({
-        provider: input.provider,
-        rawInput: input.rawInput,
-        styleOptions: input.styleOptions,
-        plan: input.plan,
-        candidateIndex: input.candidateIndex,
-        content,
-        traceId: input.traceId,
-        requestId: input.requestId,
-        seenContents: input.seenContents
-      });
-
-      const finalContent = maybeCompressed.content;
-
-      if (isDuplicateOpening(finalContent, input.seenContents)) {
-        lastReason = "与前文重复";
-        logWarn("generate-openings", "candidate duplicated previous opening", {
-          traceId: input.traceId,
-          requestId: input.requestId,
-          index: input.candidateIndex + 1,
-          attempt: attempt + 1,
-          rawPreview: truncateForLog(result.text, 160)
-        });
-        continue;
-      }
-
-      return finalContent;
-    } catch (error) {
-      lastReason = sanitizeFailureMessage(error instanceof Error ? error.message : "模型暂时不可用");
-      logWarn("generate-openings", "candidate generation attempt failed", {
-        traceId: input.traceId,
-        requestId: input.requestId,
-        index: input.candidateIndex + 1,
-        attempt: attempt + 1,
-        error: summarizeError(error)
-      });
-    }
+  const result = results[0];
+  if (!result) {
+    throw new BusinessError(
+      "OPENING_GENERATION_FAILED",
+      `生成失败：第 ${input.candidateIndex + 1} 条候选没有返回工具调用。`,
+      502
+    );
   }
 
-  throw new BusinessError(
-    "OPENING_GENERATION_FAILED",
-    `生成失败：第 ${input.candidateIndex + 1} 条候选不可恢复（${lastReason}）。`,
-    502
-  );
+  const content = normalizeProviderOpening(result.text, input.rawInput);
+  const validationReason = getMinimalOpeningValidationReason(content, input.rawInput);
+
+  if (validationReason) {
+    logWarn("generate-openings", "structured candidate normalized but still invalid", {
+      traceId: input.traceId,
+      requestId: input.requestId,
+      index: input.candidateIndex + 1,
+      reason: validationReason,
+      rawPreview: truncateForLog(result.text, 160)
+    });
+    throw new BusinessError(
+      "OPENING_GENERATION_FAILED",
+      `生成失败：第 ${input.candidateIndex + 1} 条候选不可恢复（${validationReason}）。`,
+      502
+    );
+  }
+
+  if (isDuplicateOpening(content, input.seenContents)) {
+    logWarn("generate-openings", "structured candidate duplicated previous opening", {
+      traceId: input.traceId,
+      requestId: input.requestId,
+      index: input.candidateIndex + 1,
+      rawPreview: truncateForLog(result.text, 160)
+    });
+    throw new BusinessError(
+      "OPENING_GENERATION_FAILED",
+      `生成失败：第 ${input.candidateIndex + 1} 条候选与前文重复。`,
+      502
+    );
+  }
+
+  const maybeCompressed = await compressOpeningContent({
+    provider: input.provider,
+    rawInput: input.rawInput,
+    styleOptions: input.styleOptions,
+    plan: input.plan,
+    candidateIndex: input.candidateIndex,
+    content,
+    traceId: input.traceId,
+    requestId: input.requestId,
+    seenContents: input.seenContents
+  });
+
+  const finalContent = maybeCompressed.content;
+  if (isDuplicateOpening(finalContent, input.seenContents)) {
+    logWarn("generate-openings", "structured candidate duplicated previous opening after compression", {
+      traceId: input.traceId,
+      requestId: input.requestId,
+      index: input.candidateIndex + 1,
+      rawPreview: truncateForLog(result.text, 160)
+    });
+    throw new BusinessError(
+      "OPENING_GENERATION_FAILED",
+      `生成失败：第 ${input.candidateIndex + 1} 条候选与前文重复。`,
+      502
+    );
+  }
+
+  return finalContent;
 }
 
 async function generateOpeningsSimplified(input: GenerateOpeningsInput): Promise<GenerateOpeningsResponse> {
@@ -1851,6 +1826,7 @@ async function generateOpeningsSimplified(input: GenerateOpeningsInput): Promise
   const generationStartedAt = Date.now();
   const generationRequestId = crypto.randomUUID();
   let generationRequest = { id: generationRequestId };
+  let generationState: GenerationState = provider.llmMode === "mock" ? "mock" : "real";
 
   try {
     generationRequest = await createGenerationRequest({
@@ -1875,53 +1851,49 @@ async function generateOpeningsSimplified(input: GenerateOpeningsInput): Promise
     });
   }
 
-  const prompt = buildMinimalOpeningBatchPrompt({
-    rawInput: normalizedInput,
-    styleOptions: input.styleOptions,
-    candidateCount
-  });
-
-  logInfo("generate-openings", "opening prompt built", {
-    traceId,
+  input.onProgress?.({
+    type: "meta",
     requestId: generationRequest.id,
     candidateCount,
+    usageRemaining: Math.max(0, DAILY_GUEST_LIMIT - currentUsage - 1),
     providerName: provider.providerName,
-    modelName: provider.modelName
+    modelName: provider.modelName,
+    llmMode: provider.llmMode === "mock" ? "mock" : "real",
+    generationState,
+    evaluationState: provider.llmMode === "mock" ? "mock" : "pending"
   });
 
   try {
-    const generatedCandidates = await provider.generateOpenings({
-      system: prompt.system,
-      user: prompt.user,
-      temperature: provider.llmMode === "mock" ? 0.84 : 0.92,
-      maxTokens: MAX_GENERATION_TOKENS,
-      count: candidateCount
-    });
-
+    const candidateRows: GeneratedOpeningCandidate[] = [];
     const normalizedContents: string[] = [];
-    const candidateRows = generatedCandidates.map((result, index) => {
-      const content = normalizeProviderOpening(result.text, normalizedInput);
-      const validationReason = getMinimalOpeningValidationReason(content, normalizedInput);
 
-      if (validationReason) {
-        throw new BusinessError(
-          "OPENING_GENERATION_FAILED",
-          `生成失败：第 ${index + 1} 条候选不可用（${validationReason}）。`,
-          502
-        );
-      }
+    for (let index = 0; index < candidatePlans.length; index += 1) {
+      const plan = candidatePlans[index];
+      let content: string;
 
-      if (isDuplicateOpening(content, normalizedContents)) {
-        throw new BusinessError(
-          "OPENING_GENERATION_FAILED",
-          `生成失败：第 ${index + 1} 条候选与前文重复。`,
-          502
-        );
+      try {
+        content = await generateStructuredCandidate({
+          provider,
+          rawInput: normalizedInput,
+          styleOptions: input.styleOptions,
+          plan,
+          candidateIndex: index,
+          seenContents: normalizedContents,
+          traceId,
+          requestId: generationRequest.id
+        });
+      } catch (error) {
+        logWarn("generate-openings", "slot generation failed", {
+          traceId,
+          requestId: generationRequest.id,
+          index: index + 1,
+          error: summarizeError(error)
+        });
+        throw error;
       }
 
       normalizedContents.push(content);
 
-      const plan = candidatePlans[index];
       const candidate = candidateSeed(
         plan?.strategyType ?? "statement",
         plan?.openingStrategy ?? `候选${index + 1}`,
@@ -1933,6 +1905,8 @@ async function generateOpeningsSimplified(input: GenerateOpeningsInput): Promise
         null
       );
 
+      candidateRows.push(candidate);
+
       logInfo("generate-openings", "candidate generated", {
         traceId,
         requestId: generationRequest.id,
@@ -1942,8 +1916,25 @@ async function generateOpeningsSimplified(input: GenerateOpeningsInput): Promise
         length: candidate.content.length
       });
 
-      return candidate;
-    });
+      input.onProgress?.({
+        type: "candidate",
+        requestId: generationRequest.id,
+        candidateCount,
+        slotIndex: index + 1,
+        completedCount: candidateRows.length,
+        candidate: {
+          id: candidate.id,
+          strategyType: candidate.strategyType,
+          openingStrategy: candidate.openingStrategy,
+          styleLabel: candidate.styleLabel,
+          content: candidate.content,
+          qualityScore: candidate.qualityScore,
+          evaluation: candidate.evaluation,
+          isCopied: candidate.isCopied,
+          isSelected: candidate.isSelected
+        }
+      });
+    }
 
     await createUsageRecord({
       guestId: input.guestId,
@@ -2024,6 +2015,22 @@ async function generateOpeningsSimplified(input: GenerateOpeningsInput): Promise
       });
     }
 
+    input.onProgress?.({
+      type: "complete",
+      requestId: generationRequest.id,
+      response: {
+        requestId: generationRequest.id,
+        analysis,
+        candidates: responseCandidates,
+        usageRemaining: Math.max(0, DAILY_GUEST_LIMIT - currentUsage - 1),
+        providerName: provider.providerName,
+        modelName: provider.modelName,
+        llmMode: provider.llmMode === "mock" ? "mock" : "real",
+        generationState,
+        evaluationState: provider.llmMode === "mock" ? "mock" : "pending"
+      }
+    });
+
     return {
       requestId: generationRequest.id,
       analysis,
@@ -2032,7 +2039,7 @@ async function generateOpeningsSimplified(input: GenerateOpeningsInput): Promise
       providerName: provider.providerName,
       modelName: provider.modelName,
       llmMode: provider.llmMode === "mock" ? "mock" : "real",
-      generationState: provider.llmMode === "mock" ? "mock" : "real",
+      generationState,
       evaluationState: provider.llmMode === "mock" ? "mock" : "pending"
     };
   } catch (error) {

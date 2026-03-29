@@ -3,10 +3,50 @@
 import { useEffect, useMemo, useState } from "react";
 import { HeroInput } from "@/components/hero-input";
 import { OpeningResults } from "@/components/opening-results";
-import { STYLE_OPTIONS, type OpeningCandidateView } from "@/server/opening/types";
+import {
+  STYLE_OPTIONS,
+  type EvaluationState,
+  type GenerationState,
+  type LlmMode,
+  type OpeningCandidateView
+} from "@/server/opening/types";
 
 const MAX_INPUT_LENGTH = 2000;
 const MIN_INPUT_LENGTH = 20;
+
+async function postGenerateOpenings(
+  rawInput: string,
+  selectedStyles: string[],
+  candidateCount: number
+) {
+  const response = await fetch("/api/generate-openings", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      rawInput,
+      styleOptions: selectedStyles,
+      candidateCount
+    })
+  });
+
+  const payload = (await response.json()) as {
+    requestId?: string;
+    candidates?: OpeningCandidateView[];
+    usageRemaining?: number;
+    llmMode?: LlmMode;
+    generationState?: GenerationState;
+    evaluationState?: EvaluationState;
+    error?: string;
+  };
+
+  if (response.ok) {
+    return payload;
+  }
+
+  throw new Error(payload.error ?? "生成失败，请稍后再试。");
+}
 
 export default function HomePage() {
   const [rawInput, setRawInput] = useState("");
@@ -17,6 +57,9 @@ export default function HomePage() {
   const [candidates, setCandidates] = useState<OpeningCandidateView[]>([]);
   const [requestId, setRequestId] = useState<string | null>(null);
   const [usageRemaining, setUsageRemaining] = useState<number | null>(null);
+  const [llmMode, setLlmMode] = useState<LlmMode | null>(null);
+  const [generationState, setGenerationState] = useState<GenerationState | null>(null);
+  const [evaluationState, setEvaluationState] = useState<EvaluationState | null>(null);
 
   useEffect(() => {
     document.documentElement.style.scrollBehavior = "smooth";
@@ -24,7 +67,11 @@ export default function HomePage() {
 
   const inputLength = rawInput.trim().length;
   const canGenerate = useMemo(() => {
-    return inputLength >= MIN_INPUT_LENGTH && inputLength <= MAX_INPUT_LENGTH && !isGenerating;
+    return (
+      inputLength >= MIN_INPUT_LENGTH &&
+      inputLength <= MAX_INPUT_LENGTH &&
+      !isGenerating
+    );
   }, [inputLength, isGenerating]);
 
   async function handleGenerate() {
@@ -43,38 +90,32 @@ export default function HomePage() {
     setIsGenerating(true);
     setStatusKind("idle");
     setStatus("正在组织策略，帮你拆开第一段的入口。");
+    setRequestId(null);
+    setCandidates([]);
+    setUsageRemaining(null);
+    setLlmMode(null);
+    setGenerationState(null);
+    setEvaluationState(null);
 
     try {
-      const response = await fetch("/api/generate-openings", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          rawInput,
-          styleOptions: selectedStyles,
-          candidateCount: 4
-        })
-      });
-
-      const payload = (await response.json()) as {
-        requestId?: string;
-        candidates?: OpeningCandidateView[];
-        usageRemaining?: number;
-        error?: string;
-      };
-
-      if (!response.ok) {
-        throw new Error(payload.error ?? "生成失败，请稍后再试。");
-      }
+      const payload = await postGenerateOpenings(rawInput, selectedStyles, 4);
 
       setRequestId(payload.requestId ?? null);
       setCandidates(payload.candidates ?? []);
       setUsageRemaining(typeof payload.usageRemaining === "number" ? payload.usageRemaining : null);
+      setLlmMode(payload.llmMode ?? null);
+      setGenerationState(payload.generationState ?? null);
+      setEvaluationState(payload.evaluationState ?? null);
       setStatusKind("success");
       setStatus("开头已经排好队了，可以挑一条最像你要的。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "生成失败，请稍后再试。";
+      setRequestId(null);
+      setCandidates([]);
+      setUsageRemaining(null);
+      setLlmMode(null);
+      setGenerationState(null);
+      setEvaluationState(null);
       setStatusKind("error");
       setStatus(message);
     } finally {
@@ -85,32 +126,86 @@ export default function HomePage() {
   async function handleCopy(candidate: OpeningCandidateView) {
     try {
       await navigator.clipboard.writeText(candidate.content);
-      setCandidates((current) =>
-        current.map((item) =>
-          item.id === candidate.id
-            ? { ...item, isCopied: true }
-            : item
-        )
-      );
 
       if (requestId) {
-        await fetch("/api/copy-event", {
+        const response = await fetch("/api/copy-event", {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
             candidateId: candidate.id,
-            generationRequestId: requestId
+            generationRequestId: requestId,
+            selectedCandidateId: candidate.id
           })
         });
+
+        const payload = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          throw new Error(payload.error ?? "复制失败，请稍后再试。");
+        }
+      }
+
+      setCandidates((current) =>
+        current.map((item) => ({
+          ...item,
+          isCopied: item.id === candidate.id ? true : item.isCopied,
+          isSelected: item.id === candidate.id
+        }))
+      );
+      setStatusKind("success");
+      setStatus("已经复制到剪贴板。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "复制失败了，可以手动选中后再试一次。";
+      setStatusKind("error");
+      setStatus(message || "复制失败了，可以手动选中后再试一次。");
+    }
+  }
+
+  async function handleFeedback(
+    candidate: OpeningCandidateView,
+    type: "like" | "dislike",
+    reasonTag?: string
+  ) {
+    if (!requestId) {
+      setStatusKind("error");
+      setStatus("请先生成一组候选，再进行反馈。");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/feedback", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          generationRequestId: requestId,
+          candidateId: candidate.id,
+          type,
+          reasonTag
+        })
+      });
+
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "反馈失败，请稍后再试。");
       }
 
       setStatusKind("success");
-      setStatus("已经复制到剪贴板。");
-    } catch {
+      setStatus(
+        type === "like"
+          ? reasonTag
+            ? `已经记下喜欢和原因「${reasonTag}」。`
+            : "已经记下这个喜欢了。"
+          : reasonTag
+            ? `已经记下不喜欢和原因「${reasonTag}」。`
+            : "已经记下这个不喜欢了。"
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "反馈失败，请稍后再试。";
       setStatusKind("error");
-      setStatus("复制失败了，可以手动选中后再试一次。");
+      setStatus(message);
     }
   }
 
@@ -180,7 +275,12 @@ export default function HomePage() {
         <OpeningResults
           candidates={candidates}
           usageRemaining={usageRemaining}
+          isGenerating={isGenerating}
+          llmMode={llmMode}
+          generationState={generationState}
+          evaluationState={evaluationState}
           onCopy={handleCopy}
+          onFeedback={handleFeedback}
         />
 
         <section className="tiny-note">

@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "postinstall": "prisma generate",
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
     "db:init": "node scripts/init-db.mjs",

@@ -1,0 +1,126 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model GenerationRequest {
+  id              String             @id @default(cuid())
+  guestId         String
+  rawInput        String
+  styleOptions    String
+  detectedIntent  String
+  detectedTone   String
+  contentType    String
+  candidateCount  Int
+  providerName   String
+  modelName      String
+  latencyMs      Int
+  status         String
+  errorMessage   String?
+  createdAt      DateTime           @default(now())
+  candidates     OpeningCandidate[]
+  usageRecords   UsageRecord[]
+  preferenceLearningEvents PreferenceLearningEvent[]
+  feedbackEvents FeedbackEvent[]
+}
+
+model OpeningCandidate {
+  id                   String        @id @default(cuid())
+  generationRequestId   String
+  rankOrder            Int
+  strategyType         String
+  openingStrategy      String
+  styleLabel           String
+  content              String
+  qualityScore         Int
+  evaluationTotalScore  Int?
+  evaluationJson       String?
+  evaluationModelName  String?
+  evaluatedAt          DateTime?
+  isCopied             Boolean       @default(false)
+  isSelected           Boolean       @default(false)
+  createdAt            DateTime      @default(now())
+  copiedAt             DateTime?
+  generationRequest    GenerationRequest @relation(fields: [generationRequestId], references: [id], onDelete: Cascade)
+  copyEvents           CopyEvent[]
+  selectedPreferenceLearningEvents PreferenceLearningEvent[]
+  feedbackEvents       FeedbackEvent[]
+
+  @@index([generationRequestId, rankOrder])
+}
+
+model CopyEvent {
+  id                 String          @id @default(cuid())
+  candidateId        String
+  generationRequestId String?
+  selectedCandidateId String?
+  guestId            String?
+  createdAt          DateTime        @default(now())
+  candidate          OpeningCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+}
+
+model PreferenceProfile {
+  id                   String                   @id @default(cuid())
+  profileKey           String                   @unique
+  hookStrengthWeight   Float                    @default(0)
+  clarityWeight        Float                    @default(0)
+  noveltyWeight        Float                    @default(0)
+  emotionalResonanceWeight Float                @default(0)
+  visualImageryWeight  Float                    @default(0)
+  thematicFitWeight    Float                    @default(0)
+  learningCount        Int                      @default(0)
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+  learningEvents       PreferenceLearningEvent[]
+}
+
+model PreferenceLearningEvent {
+  id                   String            @id @default(cuid())
+  profileKey           String
+  generationRequestId   String
+  selectedCandidateId   String
+  deltaJson            String
+  comparisonJson       String
+  selectedEvaluationJson String?
+  explanation         String
+  createdAt            DateTime          @default(now())
+  profile              PreferenceProfile  @relation(fields: [profileKey], references: [profileKey], onDelete: Cascade)
+  generationRequest    GenerationRequest  @relation(fields: [generationRequestId], references: [id], onDelete: Cascade)
+  selectedCandidate    OpeningCandidate   @relation(fields: [selectedCandidateId], references: [id], onDelete: Cascade)
+
+  @@index([profileKey, createdAt])
+  @@index([generationRequestId, createdAt])
+}
+
+model FeedbackEvent {
+  id                 String            @id @default(cuid())
+  generationRequestId String
+  candidateId        String
+  type               String
+  reasonTag          String?
+  createdAt          DateTime          @default(now())
+  generationRequest  GenerationRequest  @relation(fields: [generationRequestId], references: [id], onDelete: Cascade)
+  candidate          OpeningCandidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([generationRequestId, createdAt])
+  @@index([candidateId, createdAt])
+  @@index([type, createdAt])
+}
+
+model UsageRecord {
+  id                 String          @id @default(cuid())
+  guestId            String?
+  actionType         String
+  usageDate          String
+  creditsUsed        Int             @default(1)
+  generationRequestId String?
+  createdAt          DateTime        @default(now())
+  generationRequest  GenerationRequest? @relation(fields: [generationRequestId], references: [id], onDelete: SetNull)
+
+  @@index([guestId, usageDate])
+  @@index([actionType, usageDate])
+}

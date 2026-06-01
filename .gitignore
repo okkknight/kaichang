@@ -1,0 +1,15 @@
+.next
+node_modules
+.env
+.env.local
+dev.db
+dev.db-journal
+prisma/dev.db
+prisma/dev.db-journal
+*.log
+coverage
+dist
+out
+.DS_Store
+*.tsbuildinfo
+.playwright-cli/

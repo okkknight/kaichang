@@ -12,3 +12,4 @@ dist
 out
 .DS_Store
 *.tsbuildinfo
+.playwright-cli/

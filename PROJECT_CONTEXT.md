@@ -17,8 +17,8 @@
 - Hand-off pack is established and should stay compact.
 - Core generation domain, API routes, UI shell, Prisma schema, feedback routes, refine route, history/analytics routes, and logging helpers are present.
 - Front-end self-review cards were removed; scoring now stays in the backend for analysis and learning, while main-request sorting is no longer coupled to evaluation output.
-- `generateOpenings()` now resolves to the simplified progressive path in [`server/opening/generate-openings.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/generate-openings.ts): each candidate is generated as its own structured unit, emitted to the UI as soon as it is ready, then normalized and validated before persistence.
-- The opening route now supports progressive NDJSON streaming from [`app/api/generate-openings/route.ts`](/Users/linpeiwen/knightspace/kaichang/app/api/generate-openings/route.ts), and [`app/page.tsx`](/Users/linpeiwen/knightspace/kaichang/app/page.tsx) appends candidates incrementally instead of waiting for the full set.
+- `generateOpenings()` now resolves to the simplified progressive path in [`server/opening/generate-openings.ts`](./server/opening/generate-openings.ts): each candidate is generated as its own structured unit, emitted to the UI as soon as it is ready, then normalized and validated before persistence.
+- The opening route now supports progressive NDJSON streaming from [`app/api/generate-openings/route.ts`](./app/api/generate-openings/route.ts), and [`app/page.tsx`](./app/page.tsx) appends candidates incrementally instead of waiting for the full set.
 - The structured tool-call parser still exists for single-candidate generation, but the active flow is now slot-by-slot rather than a single batch call. Legacy batch / repair / compress / fallback helpers remain lower in the file as historical code.
 - `TASK-2026-03-29-005` removed the per-slot 3x retry, the opening-quality hard gate, and the slot-level fake fallback, so a slot that truly fails now fails directly while earlier streamed candidates stay on screen.
 - The refine route now uses the same structured tool-call pattern with `emit_refined_opening`, and the frontend only consumes the returned `refinedText` field instead of any analysis or thinking text.
@@ -61,28 +61,28 @@
 
 ## Key Files
 
-- [`app/page.tsx`](/Users/linpeiwen/knightspace/kaichang/app/page.tsx)
-- [`app/api/generate-openings/route.ts`](/Users/linpeiwen/knightspace/kaichang/app/api/generate-openings/route.ts)
-- [`components/opening-results.tsx`](/Users/linpeiwen/knightspace/kaichang/components/opening-results.tsx)
-- [`server/opening/generate-openings.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/generate-openings.ts)
-- [`server/opening/analyze-input.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/analyze-input.ts)
-- [`server/opening/strategy-engine.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/strategy-engine.ts)
-- [`server/opening/prompt-builder.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/prompt-builder.ts)
-- [`server/opening/rank-candidates.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/rank-candidates.ts)
-- [`server/opening/output-signatures.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/output-signatures.ts)
-- [`server/opening/feedback-preference.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/feedback-preference.ts)
-- [`server/opening/preference-learning.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/preference-learning.ts)
-- [`server/opening/llm-quality-evaluator.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/llm-quality-evaluator.ts)
-- [`server/opening/opening-quality.ts`](/Users/linpeiwen/knightspace/kaichang/server/opening/opening-quality.ts)
-- [`server/llm/providers/minimax.ts`](/Users/linpeiwen/knightspace/kaichang/server/llm/providers/minimax.ts)
-- [`server/db/generation-repo.ts`](/Users/linpeiwen/knightspace/kaichang/server/db/generation-repo.ts)
-- [`server/logger.ts`](/Users/linpeiwen/knightspace/kaichang/server/logger.ts)
-- [`server/errors.ts`](/Users/linpeiwen/knightspace/kaichang/server/errors.ts)
-- [`prisma/schema.prisma`](/Users/linpeiwen/knightspace/kaichang/prisma/schema.prisma)
-- [`app/api/feedback/route.ts`](/Users/linpeiwen/knightspace/kaichang/app/api/feedback/route.ts)
-- [`app/api/history/route.ts`](/Users/linpeiwen/knightspace/kaichang/app/api/history/route.ts)
-- [`app/api/analytics/simple/route.ts`](/Users/linpeiwen/knightspace/kaichang/app/api/analytics/simple/route.ts)
-- [`app/api/refine-opening/route.ts`](/Users/linpeiwen/knightspace/kaichang/app/api/refine-opening/route.ts)
+- [`app/page.tsx`](./app/page.tsx)
+- [`app/api/generate-openings/route.ts`](./app/api/generate-openings/route.ts)
+- [`components/opening-results.tsx`](./components/opening-results.tsx)
+- [`server/opening/generate-openings.ts`](./server/opening/generate-openings.ts)
+- [`server/opening/analyze-input.ts`](./server/opening/analyze-input.ts)
+- [`server/opening/strategy-engine.ts`](./server/opening/strategy-engine.ts)
+- [`server/opening/prompt-builder.ts`](./server/opening/prompt-builder.ts)
+- [`server/opening/rank-candidates.ts`](./server/opening/rank-candidates.ts)
+- [`server/opening/output-signatures.ts`](./server/opening/output-signatures.ts)
+- [`server/opening/feedback-preference.ts`](./server/opening/feedback-preference.ts)
+- [`server/opening/preference-learning.ts`](./server/opening/preference-learning.ts)
+- [`server/opening/llm-quality-evaluator.ts`](./server/opening/llm-quality-evaluator.ts)
+- [`server/opening/opening-quality.ts`](./server/opening/opening-quality.ts)
+- [`server/llm/providers/minimax.ts`](./server/llm/providers/minimax.ts)
+- [`server/db/generation-repo.ts`](./server/db/generation-repo.ts)
+- [`server/logger.ts`](./server/logger.ts)
+- [`server/errors.ts`](./server/errors.ts)
+- [`prisma/schema.prisma`](./prisma/schema.prisma)
+- [`app/api/feedback/route.ts`](./app/api/feedback/route.ts)
+- [`app/api/history/route.ts`](./app/api/history/route.ts)
+- [`app/api/analytics/simple/route.ts`](./app/api/analytics/simple/route.ts)
+- [`app/api/refine-opening/route.ts`](./app/api/refine-opening/route.ts)
 
 ## Verified Commands
 

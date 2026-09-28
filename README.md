@@ -30,6 +30,8 @@ MINIMAX_MODEL="MiniMax-M2.5"
 
 如果暂时没有真实模型 Key，可以保留 `MOCK_LLM="1"` 走本地模拟输出。
 
+本地 `.env`、生成内容数据库和运行日志不应提交到仓库。
+
 ## 初始化数据库
 
 ```bash
@@ -65,3 +67,7 @@ npm run dev
 - 保持输入分析、策略分配、Prompt 构建、排序层清晰
 - 不要把业务逻辑塞进 route handler
 - 不要把所有候选写成一个味道
+
+## 许可证
+
+代码采用 [MIT 许可证](LICENSE)。

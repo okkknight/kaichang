@@ -1,73 +1,40 @@
 # 开场
 
-中文优先的开头生成器。MVP 目标是把“输入内容 -> 生成 3-5 个开头 -> 展示结果 -> 一键复制 -> 落库”这条主链路跑通。
+有一个念头，却迟迟写不出让人想继续读的第一段，这是《开场》只解决的一件事。
 
-## 现在有什么
+写下人物、主题、情绪或一句模糊的感觉，它会很快给出 3–5 个可选开头：有的先立画面，有的先抛冲突，有的直接抛出一个让人停下来的观点。它们是不同的写作策略，不是同一段话换几个形容词。
 
-- Next.js App Router Web MVP
-- 输入分析、策略选择、Prompt 构建、候选排序四层分离
-- MiniMax provider 抽象，默认走 Anthropic 兼容接口
-- SQLite + Prisma 的本地数据层
-- A 阶段首页、结果卡片和复制事件
-- compact handoff pack
+《开场》服务中文写作者和内容创作者跨过起笔那一下：从“脑子里有感觉”，到“这一段让我愿意继续往下写”。选中、复制、反馈和微调都会反过来帮助它更懂你偏好的开头。
 
-## 安装
+## 目前能做什么
+
+- 按不同写法生成 3–5 张候选卡片。
+- 复制喜欢的版本，留下反馈，再继续微调。
+- 没有模型密钥时也能先用模拟输出逛完整个流程。
+
+它现在还是一个持续打磨中的 Web MVP，重点只放在把第一段写活这件事上。
+
+## 在本地运行
+
+需要 Node.js、npm 和 `sqlite3` 命令行工具。
 
 ```bash
 npm install
-```
-
-## 环境变量
-
-复制 `.env.example` 为 `.env`，最少配置：
-
-```bash
-DATABASE_URL="file:./dev.db"
-MINIMAX_API_KEY="your-key"
-MINIMAX_BASE_URL="https://api.minimaxi.com/anthropic"
-MINIMAX_MODEL="MiniMax-M2.5"
-```
-
-如果暂时没有真实模型 Key，可以保留 `MOCK_LLM="1"` 走本地模拟输出。
-
-本地 `.env`、生成内容数据库和运行日志不应提交到仓库。
-
-## 初始化数据库
-
-```bash
-npx prisma generate
+cp .env.example .env
 npm run db:push
-```
-
-`npm run db:push` 会初始化本地 SQLite 表结构，便于在当前环境直接跑 MVP。
-默认数据库文件位于 `prisma/dev.db`，初始化脚本会按照 Prisma 的 SQLite 相对路径规则放到这里。
-
-## 启动
-
-```bash
 npm run dev
 ```
 
-打开 `http://localhost:3000`。
+打开 <http://localhost:3000>。默认的 `.env.example` 使用 `MOCK_LLM="1"`，无需密钥即可查看模拟结果。要调用 MiniMax，请在 `.env` 中设置 `MINIMAX_API_KEY`，并将 `MOCK_LLM` 改为 `"0"`；模型地址和名称也可在同一文件中调整。
 
-## 主流程自测
+SQLite 文件默认是 `prisma/dev.db`。本地 `.env`、数据库和运行日志不要提交到仓库。数据库初始化细节见 [`scripts/init-db.mjs`](scripts/init-db.mjs)。
 
-推荐输入：
+## 项目结构
 
-1. 小说感
-   - `我想写一个关于海上女船长的故事，她表面强势，内心很重感情，开头要有宿命感和画面感。`
-2. 随笔感
-   - `最近总觉得时间过得很快，人也变得越来越沉默，想写一种有点伤感但不矫情的开头。`
-3. 公众号感
-   - `我想写一篇关于拖延症的内容，开头要适合公众号，抓人一点，但不要太夸张。`
+开头生成拆成输入分析、策略选择、Prompt 构建和候选排序几个步骤。Next.js 页面负责输入与结果展示，API 路由连接业务逻辑、模型 Provider 和 SQLite。这样可以单独调整“怎样写开头”，而不用把整套逻辑塞进页面或一次模型调用里。
 
-## 设计原则
+代码入口在 [`app/page.tsx`](app/page.tsx)，核心生成逻辑在 [`server/opening/`](server/opening/)。
 
-- 保持“开头生成器”而不是“聊天机器人”
-- 保持输入分析、策略分配、Prompt 构建、排序层清晰
-- 不要把业务逻辑塞进 route handler
-- 不要把所有候选写成一个味道
-
-## 许可证
+## 许可
 
 代码采用 [MIT 许可证](LICENSE)。
